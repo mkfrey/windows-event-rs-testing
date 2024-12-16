@@ -317,6 +317,7 @@ impl TryFrom<EVT_VARIANT> for EventVariantValue {
 
         if is_array {
             unsafe {
+                #![allow(nonstandard_style)]
                 match value_type {
                     EvtVarTypeString => Ok(Self::StringArr(
                         from_raw_parts(value.Anonymous.StringArr as *const PCWSTR_SYS, count)
