@@ -459,6 +459,11 @@ impl Drop for EventRenderContext {
 
 impl EventRenderContext {
     /// Create a new render context with the provided parameters.
+    ///
+    /// # Parameters
+    /// - `valuepathscount`: The number of elements in the `valuepaths` array.
+    /// - `valuepaths`: A pointer to an array of strings that specify the names of the values to be rendered.
+    /// - `flags`: Flags that specify which context is created.
     pub fn create(
         valuepathscount: u32,
         valuepaths: *const windows_sys::core::PCWSTR,
@@ -517,7 +522,10 @@ pub struct EventSystemContext {
 impl EventSystemContext {
     /// Extract the system context data from a variant buffer.
     ///
-    /// Requires the event variant to contain valid system context data, no checks are performed.
+    /// # Safety
+    ///
+    /// This function is unsafe because it assumes that the `variant` parameter contains valid system context data.
+    /// No checks are performed to ensure the validity of the data, and dereferencing raw pointers is inherently unsafe.
     pub unsafe fn from_variant_buffer(variant: &EventVariantBuffer) -> Self {
         unsafe {
             Self {
