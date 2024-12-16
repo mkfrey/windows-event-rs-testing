@@ -1,14 +1,13 @@
-use chrono::{
-    prelude::{DateTime, Utc},
-    Datelike, TimeZone, Timelike,
-};
-use std::{ops::Mul, time::SystemTime};
+
 use windows_strings::{PCSTR, PCWSTR};
 use windows_sys::Win32::Foundation::FILETIME;
 use windows_sys::{
     core::{PCSTR as PCSTR_SYS, PCWSTR as PCWSTR_SYS},
     Win32::{Foundation::SYSTEMTIME, System::EventLog::EVT_HANDLE},
 };
+
+use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
+use std::time::{Duration, UNIX_EPOCH};
 
 pub trait WindowsConversionFrom<T> {
     fn win_from(value: T) -> Self;
@@ -54,8 +53,36 @@ impl WindowsConversionFrom<u64> for FILETIME {
     fn win_from(value: u64) -> Self {
         Self {
             dwLowDateTime: (value & 0xFFFFFFFF) as u32,
-            dwHighDateTime: (value >> 32) as u32
+            dwHighDateTime: (value >> 32) as u32,
         }
+    }
+}
+
+impl WindowsConversionFrom<SYSTEMTIME> for NaiveDateTime {
+    fn win_from(value: SYSTEMTIME) -> Self {
+        NaiveDate::from_ymd_opt(value.wYear as i32, value.wMonth as u32, value.wDay as u32)
+            .and_then(|date| {
+                date.and_hms_milli_opt(
+                    value.wHour as u32,
+                    value.wMinute as u32,
+                    value.wSecond as u32,
+                    value.wMilliseconds as u32,
+                )
+            })
+            .expect("Invalid SYSTEMTIME value")
+    }
+}
+
+impl WindowsConversionFrom<FILETIME> for DateTime<Utc> {
+    fn win_from(file_time: FILETIME) -> Self {
+        let filetime_as_u64 =
+            ((file_time.dwHighDateTime as u64) << 32) | (file_time.dwLowDateTime as u64);
+
+        let epoch_difference = Duration::from_secs(11_644_473_600);
+        let system_time =
+            UNIX_EPOCH + Duration::from_nanos(filetime_as_u64 * 100) - epoch_difference;
+
+        DateTime::<Utc>::from(system_time)
     }
 }
 
