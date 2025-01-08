@@ -59,20 +59,15 @@ pub extern "system" fn evt_subscribe_callback(
         Ok(variables) => {
             println!("Event has {} properties.", variables.len());
 
-            variables.iter().for_each(|f| match f {
-                Ok(val) => match val {
-                    EventVariantValue::String(str) => {
-                        println!("Got String({})", str)
-                    }
-                    _ => (),
-                },
-                Err(err) => println!("{}", err),
-            });
+            variables.iter().for_each(|f| println!("{:?}", f));
         }
-        Err(err) => println!("{}", err),
+        Err(err) => println!("Error: {}", err),
     }
 
-    event.render_description();
+    match event.render_description() {
+        Ok(val) => println!("Description: {}", val),
+        Err(err) => println!("{}", err),
+    }
 
     return 0;
 }
