@@ -1,6 +1,6 @@
 use std::ffi::c_void;
-use std::fmt::Debug;
 use std::fmt;
+use std::fmt::Debug;
 use std::ptr::{null, null_mut};
 use std::slice::from_raw_parts;
 
@@ -49,7 +49,11 @@ impl<'a> WindowsEvent<'a> {
             } else {
                 match EventRenderContext::create(
                     valuepaths.len() as u32,
-                    valuepaths.as_ptr(),
+                    if valuepaths.len() > 1 {
+                        valuepaths.as_ptr()
+                    } else {
+                        null()
+                    },
                     context_flags,
                 ) {
                     Ok(context) => context,
