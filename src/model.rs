@@ -6,6 +6,8 @@ use std::slice::from_raw_parts;
 use crate::WindowsConversionTo;
 use crate::WindowsError;
 
+use chrono::{Date, DateTime, NaiveDate, NaiveDateTime, Utc};
+
 use windows_result::HRESULT;
 use windows_strings::HSTRING;
 use windows_sys::core::{GUID, PCSTR as PCSTR_SYS, PCWSTR as PCWSTR_SYS};
@@ -258,8 +260,8 @@ pub enum EventVariantValue {
     UInt64(u64),
     Single(f32),
     Double(f64),
-    FileTime(FILETIME),
-    SysTime(Box<SYSTEMTIME>),
+    FileTime(DateTime<Utc>),
+    SysTime(NaiveDateTime),
     Guid(Box<GUID>),
     HexInt32(u32),
     HexInt64(u64),
@@ -279,8 +281,8 @@ pub enum EventVariantValue {
     UInt64Arr(Vec<u64>),
     SingleArr(Vec<f32>),
     DoubleArr(Vec<f64>),
-    FileTimeArr(Vec<FILETIME>),
-    SysTimeArr(Vec<SYSTEMTIME>),
+    FileTimeArr(Vec<DateTime<Utc>>),
+    SysTimeArr(Vec<NaiveDateTime>),
     GuidArr(Vec<GUID>),
     HexInt32Arr(Vec<u32>),
     HexInt64Arr(Vec<u64>),
@@ -374,10 +376,10 @@ impl TryFrom<EVT_VARIANT> for EventVariantValue {
                         from_raw_parts(value.Anonymous.SizeTArr, count).to_vec(),
                     )),
                     EvtVarTypeFileTime => Ok(Self::FileTimeArr(
-                        from_raw_parts(value.Anonymous.FileTimeArr, count).to_vec(),
+                        from_raw_parts(value.Anonymous.FileTimeArr, count).iter().map(|f| (*f).win_into()).collect(),
                     )),
                     EvtVarTypeSysTime => Ok(Self::SysTimeArr(
-                        from_raw_parts(value.Anonymous.SysTimeArr, count).to_vec(),
+                        from_raw_parts(value.Anonymous.SysTimeArr, count).iter().map(|s| (*s).win_into()).collect(),
                     )),
                     EvtVarTypeSid => Ok(Self::SidArr(
                         from_raw_parts(value.Anonymous.SidArr as *const *const SID, count)
@@ -427,7 +429,7 @@ impl TryFrom<EVT_VARIANT> for EventVariantValue {
                     EvtVarTypeFileTime => {
                         Ok(Self::FileTime(value.Anonymous.FileTimeVal.win_into()))
                     }
-                    EvtVarTypeSysTime => Ok(Self::SysTime(Box::new(*value.Anonymous.SysTimeVal))),
+                    EvtVarTypeSysTime => Ok(Self::SysTime((*value.Anonymous.SysTimeVal).win_into())),
                     EvtVarTypeSid => {
                         Ok(Self::Sid(Box::new(*(value.Anonymous.SidVal as *const SID))))
                     }
