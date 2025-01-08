@@ -299,16 +299,23 @@ pub enum EventVariantValue {
     Xml(String),
     XmlArr(Vec<String>),
     UnknownType(i32),
-    UnknownTypeArr(i32)
+    UnknownTypeArr(i32),
 }
 
 fn format_guid(guid: &GUID) -> String {
-    format!("{{{:08x}-{:04x}-{:04x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}}}",
+    format!(
+        "{{{:08x}-{:04x}-{:04x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}}}",
         guid.data1,
         guid.data2,
         guid.data3,
-        guid.data4[0], guid.data4[1],
-        guid.data4[2], guid.data4[3], guid.data4[4], guid.data4[5], guid.data4[6], guid.data4[7]
+        guid.data4[0],
+        guid.data4[1],
+        guid.data4[2],
+        guid.data4[3],
+        guid.data4[4],
+        guid.data4[5],
+        guid.data4[6],
+        guid.data4[7]
     )
 }
 
@@ -318,19 +325,39 @@ fn format_sid(value: &SID) -> String {
     let sub_authority_count = unsafe { *(&value.SubAuthorityCount as *const u8) };
     let identifier_authority = &value.IdentifierAuthority.Value;
     let sub_authorities = unsafe {
-        slice::from_raw_parts(&value.SubAuthority as *const u32, sub_authority_count as usize)
+        slice::from_raw_parts(
+            &value.SubAuthority as *const u32,
+            sub_authority_count as usize,
+        )
     };
 
     let identifier_authority = if identifier_authority[0..5] == [0, 0, 0, 0, 0] {
         identifier_authority[5].to_string()
     } else {
-        format!("{}",
-            u64::from_be_bytes([0, 0, identifier_authority[0], identifier_authority[1], identifier_authority[2], identifier_authority[3], identifier_authority[4], identifier_authority[5]])
+        format!(
+            "{}",
+            u64::from_be_bytes([
+                0,
+                0,
+                identifier_authority[0],
+                identifier_authority[1],
+                identifier_authority[2],
+                identifier_authority[3],
+                identifier_authority[4],
+                identifier_authority[5]
+            ])
         )
     };
 
-    let sub_authorities = sub_authorities.iter().map(|s| s.to_string()).collect::<Vec<_>>().join("-");
-    format!("S-{}-{}-{}", revision, identifier_authority, sub_authorities)
+    let sub_authorities = sub_authorities
+        .iter()
+        .map(|s| s.to_string())
+        .collect::<Vec<_>>()
+        .join("-");
+    format!(
+        "S-{}-{}-{}",
+        revision, identifier_authority, sub_authorities
+    )
 }
 
 impl fmt::Debug for EventVariantValue {
@@ -354,8 +381,18 @@ impl fmt::Debug for EventVariantValue {
             EventVariantValue::HexInt32(value) => write!(f, "HexInt32(0x{:08X})", value),
             EventVariantValue::HexInt64(value) => write!(f, "HexInt64(0x{:016X})", value),
             EventVariantValue::String(value) => f.debug_tuple("String").field(value).finish(),
-            EventVariantValue::AnsiString(value) => f.debug_tuple("AnsiString").field(value).finish(),
-            EventVariantValue::Binary(value) => write!(f, "Binary({:?})", value.iter().map(|b| format!("{:02X}", b)).collect::<Vec<_>>().join(" ")),
+            EventVariantValue::AnsiString(value) => {
+                f.debug_tuple("AnsiString").field(value).finish()
+            }
+            EventVariantValue::Binary(value) => write!(
+                f,
+                "Binary({:?})",
+                value
+                    .iter()
+                    .map(|b| format!("{:02X}", b))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            ),
             EventVariantValue::Sid(value) => write!(f, "Sid({})", format_sid(value)),
             EventVariantValue::SizeT(value) => f.debug_tuple("SizeT").field(value).finish(),
             EventVariantValue::BoolArr(value) => f.debug_tuple("BoolArr").field(value).finish(),
@@ -369,20 +406,40 @@ impl fmt::Debug for EventVariantValue {
             EventVariantValue::UInt64Arr(value) => f.debug_tuple("UInt64Arr").field(value).finish(),
             EventVariantValue::SingleArr(value) => f.debug_tuple("SingleArr").field(value).finish(),
             EventVariantValue::DoubleArr(value) => f.debug_tuple("DoubleArr").field(value).finish(),
-            EventVariantValue::FileTimeArr(value) => f.debug_tuple("FileTimeArr").field(value).finish(),
-            EventVariantValue::SysTimeArr(value) => f.debug_tuple("SysTimeArr").field(value).finish(),
+            EventVariantValue::FileTimeArr(value) => {
+                f.debug_tuple("FileTimeArr").field(value).finish()
+            }
+            EventVariantValue::SysTimeArr(value) => {
+                f.debug_tuple("SysTimeArr").field(value).finish()
+            }
             EventVariantValue::GuidArr(value) => {
                 let formatted: Vec<String> = value.iter().map(|g| format_guid(g)).collect();
                 write!(f, "GuidArr({:?})", formatted)
-            },
+            }
             EventVariantValue::HexInt32Arr(value) => {
-                write!(f, "HexInt32Arr({:?})", value.iter().map(|v| format!("0x{:08X}", v)).collect::<Vec<_>>())
-            },
+                write!(
+                    f,
+                    "HexInt32Arr({:?})",
+                    value
+                        .iter()
+                        .map(|v| format!("0x{:08X}", v))
+                        .collect::<Vec<_>>()
+                )
+            }
             EventVariantValue::HexInt64Arr(value) => {
-                write!(f, "HexInt64Arr({:?})", value.iter().map(|v| format!("0x{:016X}", v)).collect::<Vec<_>>())
-            },
+                write!(
+                    f,
+                    "HexInt64Arr({:?})",
+                    value
+                        .iter()
+                        .map(|v| format!("0x{:016X}", v))
+                        .collect::<Vec<_>>()
+                )
+            }
             EventVariantValue::StringArr(value) => f.debug_tuple("StringArr").field(value).finish(),
-            EventVariantValue::AnsiStringArr(value) => f.debug_tuple("AnsiStringArr").field(value).finish(),
+            EventVariantValue::AnsiStringArr(value) => {
+                f.debug_tuple("AnsiStringArr").field(value).finish()
+            }
             EventVariantValue::SidArr(value) => {
                 let formatted: Vec<String> = value.iter().map(|s| format_sid(s)).collect();
                 write!(f, "SidArr({:?})", formatted)
@@ -391,12 +448,15 @@ impl fmt::Debug for EventVariantValue {
             EventVariantValue::EvtHandle(value) => f.debug_tuple("EvtHandle").field(value).finish(),
             EventVariantValue::Xml(value) => f.debug_tuple("Xml").field(value).finish(),
             EventVariantValue::XmlArr(value) => f.debug_tuple("XmlArr").field(value).finish(),
-            EventVariantValue::UnknownType(value) => f.debug_tuple("UnknownType").field(value).finish(),
-            EventVariantValue::UnknownTypeArr(value) => f.debug_tuple("UnknownTypeArr").field(value).finish(),
+            EventVariantValue::UnknownType(value) => {
+                f.debug_tuple("UnknownType").field(value).finish()
+            }
+            EventVariantValue::UnknownTypeArr(value) => {
+                f.debug_tuple("UnknownTypeArr").field(value).finish()
+            }
         }
     }
 }
-
 
 impl TryFrom<EVT_VARIANT> for EventVariantValue {
     type Error = String;
@@ -465,10 +525,16 @@ impl TryFrom<EVT_VARIANT> for EventVariantValue {
                         from_raw_parts(value.Anonymous.SizeTArr, count).to_vec(),
                     )),
                     EvtVarTypeFileTime => Ok(Self::FileTimeArr(
-                        from_raw_parts(value.Anonymous.FileTimeArr, count).iter().map(|f| (*f).win_into()).collect(),
+                        from_raw_parts(value.Anonymous.FileTimeArr, count)
+                            .iter()
+                            .map(|f| (*f).win_into())
+                            .collect(),
                     )),
                     EvtVarTypeSysTime => Ok(Self::SysTimeArr(
-                        from_raw_parts(value.Anonymous.SysTimeArr, count).iter().map(|s| (*s).win_into()).collect(),
+                        from_raw_parts(value.Anonymous.SysTimeArr, count)
+                            .iter()
+                            .map(|s| (*s).win_into())
+                            .collect(),
                     )),
                     EvtVarTypeSid => Ok(Self::SidArr(
                         from_raw_parts(value.Anonymous.SidArr as *const *const SID, count)
@@ -493,6 +559,7 @@ impl TryFrom<EVT_VARIANT> for EventVariantValue {
             }
         } else {
             unsafe {
+                #![allow(nonstandard_style)]
                 match value_type {
                     EvtVarTypeNull => Ok(Self::Null),
                     EvtVarTypeString => Ok(Self::String(value.Anonymous.StringVal.win_into())),
@@ -518,7 +585,9 @@ impl TryFrom<EVT_VARIANT> for EventVariantValue {
                     EvtVarTypeFileTime => {
                         Ok(Self::FileTime(value.Anonymous.FileTimeVal.win_into()))
                     }
-                    EvtVarTypeSysTime => Ok(Self::SysTime((*value.Anonymous.SysTimeVal).win_into())),
+                    EvtVarTypeSysTime => {
+                        Ok(Self::SysTime((*value.Anonymous.SysTimeVal).win_into()))
+                    }
                     EvtVarTypeSid => {
                         Ok(Self::Sid(Box::new(*(value.Anonymous.SidVal as *const SID))))
                     }
