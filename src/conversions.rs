@@ -1,9 +1,8 @@
-
 use windows_strings::{PCSTR, PCWSTR};
-use windows_sys::Win32::Foundation::FILETIME;
 use windows_sys::{
     core::{PCSTR as PCSTR_SYS, PCWSTR as PCWSTR_SYS},
-    Win32::{Foundation::SYSTEMTIME, System::EventLog::EVT_HANDLE},
+    Win32::Foundation::{FILETIME, SYSTEMTIME},
+    Win32::System::EventLog::EVT_HANDLE,
 };
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
@@ -85,18 +84,3 @@ impl WindowsConversionFrom<FILETIME> for DateTime<Utc> {
         DateTime::<Utc>::from(system_time)
     }
 }
-
-/*
-impl WindowsConversionFrom<SYSTEMTIME> for DateTime {
-    fn win_from(value: SYSTEMTIME) -> Self {
-        let date_time = DateTime::default();
-        date_time.with_year(value.wYear)
-        .and_then(|dt|  dt.with_month(value.wMonth))
-        .and_then(|dt| dt.with_month(value.wMonth))
-        .and_then(|dt| dt.with_day(value.wDay))
-        .and_then(|dt| dt.with_hour(value.wHour))
-        .and_then(|dt| dt.with_minute(value.wMinute))
-        .and_then(|dt| dt.with_second(value.wSecond))
-        .and_then(|dt| dt.mill(value.wMilliseconds))
- T   }
-}*/
