@@ -7,13 +7,13 @@ use std::slice::from_raw_parts;
 use crate::WindowsConversionTo;
 use crate::WindowsError;
 
-use chrono::{Date, DateTime, NaiveDate, NaiveDateTime, Utc};
+use chrono::{DateTime, NaiveDateTime, Utc};
 
 use windows_result::HRESULT;
-use windows_strings::{HSTRING, PCWSTR};
-use windows_sys::core::{GUID, PCSTR as PCSTR_SYS, PCWSTR as PCWSTR_SYS, PSTR};
-use windows_sys::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, FILETIME, SYSTEMTIME};
-use windows_sys::Win32::Security::{PSID, SID};
+use windows_strings::HSTRING;
+use windows_sys::core::{GUID, PCSTR as PCSTR_SYS, PCWSTR as PCWSTR_SYS};
+use windows_sys::Win32::Foundation::ERROR_INSUFFICIENT_BUFFER;
+use windows_sys::Win32::Security::SID;
 use windows_sys::Win32::System::EventLog::*;
 
 static ZERO_BUFFER_SIZE: u32 = 0;
@@ -221,7 +221,7 @@ impl<'a> WindowsEvent<'a> {
 
                 match result {
                     Ok(str) => return Ok(str),
-                    Err((error, buffer_size)) => {
+                    Err((error, _)) => {
                         return Err(format!(
                             "Error during message formatting: {:?}",
                             error.code()
@@ -232,7 +232,6 @@ impl<'a> WindowsEvent<'a> {
             _ => return Err("Unexpected result on message query".to_owned()),
         };
     }
-
 }
 
 /// Convenience wrapper around a buffer containing `EVENT_VARIANT` objects.
@@ -548,48 +547,48 @@ impl From<EVT_VARIANT> for EventVariantValue {
                             .map(|s| (*s).win_into())
                             .collect(),
                     ),
-                    EvtVarTypeSByte => Self::SByteArr(
-                        from_raw_parts(value.Anonymous.SByteArr, count).to_vec(),
-                    ),
-                    EvtVarTypeByte => Self::ByteArr(
-                        from_raw_parts(value.Anonymous.ByteArr, count).to_vec(),
-                    ),
-                    EvtVarTypeInt16 => Self::Int16Arr(
-                        from_raw_parts(value.Anonymous.Int16Arr, count).to_vec(),
-                    ),
-                    EvtVarTypeUInt16 => Self::UInt16Arr(
-                        from_raw_parts(value.Anonymous.UInt16Arr, count).to_vec(),
-                    ),
-                    EvtVarTypeInt32 => Self::Int32Arr(
-                        from_raw_parts(value.Anonymous.Int32Arr, count).to_vec(),
-                    ),
-                    EvtVarTypeUInt32 => Self::UInt32Arr(
-                        from_raw_parts(value.Anonymous.UInt32Arr, count).to_vec(),
-                    ),
-                    EvtVarTypeInt64 => Self::Int64Arr(
-                        from_raw_parts(value.Anonymous.Int64Arr, count).to_vec(),
-                    ),
-                    EvtVarTypeUInt64 => Self::UInt64Arr(
-                        from_raw_parts(value.Anonymous.UInt64Arr, count).to_vec(),
-                    ),
-                    EvtVarTypeSingle => Self::SingleArr(
-                        from_raw_parts(value.Anonymous.SingleArr, count).to_vec(),
-                    ),
-                    EvtVarTypeDouble => Self::DoubleArr(
-                        from_raw_parts(value.Anonymous.DoubleArr, count).to_vec(),
-                    ),
+                    EvtVarTypeSByte => {
+                        Self::SByteArr(from_raw_parts(value.Anonymous.SByteArr, count).to_vec())
+                    }
+                    EvtVarTypeByte => {
+                        Self::ByteArr(from_raw_parts(value.Anonymous.ByteArr, count).to_vec())
+                    }
+                    EvtVarTypeInt16 => {
+                        Self::Int16Arr(from_raw_parts(value.Anonymous.Int16Arr, count).to_vec())
+                    }
+                    EvtVarTypeUInt16 => {
+                        Self::UInt16Arr(from_raw_parts(value.Anonymous.UInt16Arr, count).to_vec())
+                    }
+                    EvtVarTypeInt32 => {
+                        Self::Int32Arr(from_raw_parts(value.Anonymous.Int32Arr, count).to_vec())
+                    }
+                    EvtVarTypeUInt32 => {
+                        Self::UInt32Arr(from_raw_parts(value.Anonymous.UInt32Arr, count).to_vec())
+                    }
+                    EvtVarTypeInt64 => {
+                        Self::Int64Arr(from_raw_parts(value.Anonymous.Int64Arr, count).to_vec())
+                    }
+                    EvtVarTypeUInt64 => {
+                        Self::UInt64Arr(from_raw_parts(value.Anonymous.UInt64Arr, count).to_vec())
+                    }
+                    EvtVarTypeSingle => {
+                        Self::SingleArr(from_raw_parts(value.Anonymous.SingleArr, count).to_vec())
+                    }
+                    EvtVarTypeDouble => {
+                        Self::DoubleArr(from_raw_parts(value.Anonymous.DoubleArr, count).to_vec())
+                    }
                     EvtVarTypeBoolean => Self::BoolArr(
                         from_raw_parts(value.Anonymous.BooleanArr, count)
                             .iter()
                             .map(|b| *b != 0)
                             .collect(),
                     ),
-                    EvtVarTypeGuid => Self::GuidArr(
-                        from_raw_parts(value.Anonymous.GuidArr, count).to_vec(),
-                    ),
-                    EvtVarTypeSizeT => Self::SizeTArr(
-                        from_raw_parts(value.Anonymous.SizeTArr, count).to_vec(),
-                    ),
+                    EvtVarTypeGuid => {
+                        Self::GuidArr(from_raw_parts(value.Anonymous.GuidArr, count).to_vec())
+                    }
+                    EvtVarTypeSizeT => {
+                        Self::SizeTArr(from_raw_parts(value.Anonymous.SizeTArr, count).to_vec())
+                    }
                     EvtVarTypeFileTime => Self::FileTimeArr(
                         from_raw_parts(value.Anonymous.FileTimeArr, count)
                             .iter()
@@ -608,12 +607,12 @@ impl From<EVT_VARIANT> for EventVariantValue {
                             .map(|s| **s)
                             .collect(),
                     ),
-                    EvtVarTypeHexInt32 => Self::HexInt32Arr(
-                        from_raw_parts(value.Anonymous.UInt32Arr, count).to_vec(),
-                    ),
-                    EvtVarTypeHexInt64 => Self::HexInt64Arr(
-                        from_raw_parts(value.Anonymous.UInt64Arr, count).to_vec(),
-                    ),
+                    EvtVarTypeHexInt32 => {
+                        Self::HexInt32Arr(from_raw_parts(value.Anonymous.UInt32Arr, count).to_vec())
+                    }
+                    EvtVarTypeHexInt64 => {
+                        Self::HexInt64Arr(from_raw_parts(value.Anonymous.UInt64Arr, count).to_vec())
+                    }
                     EvtVarTypeEvtXml => Self::XmlArr(
                         from_raw_parts(value.Anonymous.XmlValArr, count)
                             .iter()
@@ -643,20 +642,14 @@ impl From<EVT_VARIANT> for EventVariantValue {
                     EvtVarTypeSingle => Self::Single(value.Anonymous.SingleVal),
                     EvtVarTypeDouble => Self::Double(value.Anonymous.DoubleVal),
                     EvtVarTypeBoolean => Self::Bool(value.Anonymous.BooleanVal != 0),
-                    EvtVarTypeBinary => Self::Binary(
-                        from_raw_parts(value.Anonymous.BinaryVal, count).to_vec(),
-                    ),
+                    EvtVarTypeBinary => {
+                        Self::Binary(from_raw_parts(value.Anonymous.BinaryVal, count).to_vec())
+                    }
                     EvtVarTypeGuid => Self::Guid(Box::new(*value.Anonymous.GuidVal)),
                     EvtVarTypeSizeT => Self::SizeT(value.Anonymous.SizeTVal),
-                    EvtVarTypeFileTime => {
-                        Self::FileTime(value.Anonymous.FileTimeVal.win_into())
-                    }
-                    EvtVarTypeSysTime => {
-                        Self::SysTime((*value.Anonymous.SysTimeVal).win_into())
-                    }
-                    EvtVarTypeSid => {
-                        Self::Sid(Box::new(*(value.Anonymous.SidVal as *const SID)))
-                    }
+                    EvtVarTypeFileTime => Self::FileTime(value.Anonymous.FileTimeVal.win_into()),
+                    EvtVarTypeSysTime => Self::SysTime((*value.Anonymous.SysTimeVal).win_into()),
+                    EvtVarTypeSid => Self::Sid(Box::new(*(value.Anonymous.SidVal as *const SID))),
                     EvtVarTypeHexInt32 => Self::HexInt32(value.Anonymous.UInt32Val),
                     EvtVarTypeHexInt64 => Self::HexInt64(value.Anonymous.UInt64Val),
                     EvtVarTypeEvtHandle => Self::EvtHandle(value.Anonymous.EvtHandleVal),

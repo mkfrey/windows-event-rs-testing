@@ -1,14 +1,11 @@
 use std::ffi::c_void;
-use std::fmt::Debug;
-use std::ops::{Deref, Index};
-use std::ptr::{null, null_mut};
-use std::slice::{from_raw_parts, Windows};
+use std::ptr::null_mut;
 use std::thread;
 use std::time::Duration;
 
 use windows_result::Error as WindowsError;
 use windows_strings::HSTRING;
-use windows_sys::Win32::System::EventLog::{EVT_VARIANT, *};
+use windows_sys::Win32::System::EventLog::*;
 
 mod conversions;
 mod model;
@@ -17,12 +14,11 @@ mod tests;
 use conversions::*;
 use model::*;
 
-static ZERO_BUFFER_SIZE: u32 = 0;
 static NULL_EVT_HANDLE: EVT_HANDLE = 0 as EVT_HANDLE;
 
 pub extern "system" fn evt_subscribe_callback(
     action: EVT_SUBSCRIBE_NOTIFY_ACTION,
-    user_context: *const c_void,
+    _user_context: *const c_void,
     event_handle: EVT_HANDLE,
 ) -> u32 {
     match action {
