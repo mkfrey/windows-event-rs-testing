@@ -64,9 +64,9 @@ pub extern "system" fn evt_subscribe_callback(
         Err(err) => println!("Error: {}", err),
     }
 
-    match event.render_description() {
+    match event.render_message() {
         Ok(val) => println!("Description: {}", val),
-        Err(err) => println!("{}", err),
+        Err(err) => println!("Error rendering message: {}", err),
     }
 
     return 0;

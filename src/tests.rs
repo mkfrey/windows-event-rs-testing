@@ -44,7 +44,7 @@ fn test_systemtime_to_naive_datetime() {
 #[test]
 fn test_filetime_to_datetime() {
     use crate::conversions::WindowsConversionFrom;
-    use chrono::{DateTime, Utc, Datelike, Timelike};
+    use chrono::{DateTime, Datelike, Timelike, Utc};
     use windows_sys::Win32::Foundation::FILETIME;
 
     let file_time = FILETIME {

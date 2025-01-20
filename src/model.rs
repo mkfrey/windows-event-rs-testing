@@ -10,8 +10,8 @@ use crate::WindowsError;
 use chrono::{Date, DateTime, NaiveDate, NaiveDateTime, Utc};
 
 use windows_result::HRESULT;
-use windows_strings::HSTRING;
-use windows_sys::core::{GUID, PCSTR as PCSTR_SYS, PCWSTR as PCWSTR_SYS};
+use windows_strings::{HSTRING, PCWSTR};
+use windows_sys::core::{GUID, PCSTR as PCSTR_SYS, PCWSTR as PCWSTR_SYS, PSTR};
 use windows_sys::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, FILETIME, SYSTEMTIME};
 use windows_sys::Win32::Security::{PSID, SID};
 use windows_sys::Win32::System::EventLog::*;
@@ -67,7 +67,6 @@ impl<'a> WindowsEvent<'a> {
             };
 
         // Render the event values with zero length buffer to determine size.
-        // Hint: EvtRender may return 1 if the property count of the event is 0.
         unsafe {
             EvtRender(
                 render_context.as_ptr(),
@@ -91,6 +90,8 @@ impl<'a> WindowsEvent<'a> {
                 ));
             }
         }
+
+        // TODO: Does returning an empty Vec make sense when no error occured?
 
         let mut buffer: Vec<u8> = vec![0; buffer_used as usize];
 
@@ -138,7 +139,36 @@ impl<'a> WindowsEvent<'a> {
         Ok((raw_buffer.as_ptr() as *const u16).win_into())
     }
 
-    pub fn render_description(&self) -> Result<String, String> {
+    fn render_message_int(
+        &self,
+        metadata: isize,
+        max_buf_len: usize,
+    ) -> Result<String, (WindowsError, u32)> {
+        let mut message_buf: Vec<u16> = vec![0; max_buf_len];
+        let mut buffer_used: u32 = 0;
+
+        let result = unsafe {
+            EvtFormatMessage(
+                metadata,
+                *self.handle,
+                0,
+                0,
+                null(),
+                EvtFormatMessageEvent,
+                message_buf.len() as u32,
+                message_buf.as_mut_ptr(),
+                &mut buffer_used,
+            )
+        };
+
+        if result != 0 {
+            Ok(message_buf.as_ptr().win_into())
+        } else {
+            Err((WindowsError::from_win32(), buffer_used))
+        }
+    }
+
+    pub fn render_message(&self) -> Result<String, String> {
         let pathspec_system_provider = HSTRING::from("Event/System/Provider/@Name");
         let pathspec_rendering_inf = HSTRING::from("Event/RenderingInfo/Message");
 
@@ -155,16 +185,54 @@ impl<'a> WindowsEvent<'a> {
 
         let buffer = unsafe { EventVariantBuffer::from_raw_buffer(raw_buffer, property_count) };
 
-        match buffer
-            .get_property_value(0)
-            .expect("Invalid return value")
-        {
-            // If the event was not forwarded, Null will be returned, otherwise a String.
-            EventVariantValue::Null => Err("Not Implemented".to_owned()),
-            EventVariantValue::String(str) => Ok(str),
-            _ => Err("Not Implemented".to_owned()),
-        }
+        match buffer.get_property_value(1) {
+            Some(EventVariantValue::String(str)) => return Ok(str),
+            Some(EventVariantValue::Null) => {
+                let provider_name = HSTRING::from(match buffer.get_property_value(0) {
+                    Some(EventVariantValue::String(str)) => str,
+                    _ => return Err("Unexpected result on provider name query".to_owned()),
+                });
+
+                let metadata_handle = unsafe {
+                    EvtOpenPublisherMetadata(
+                        0 as EVT_HANDLE,
+                        provider_name.as_ptr(),
+                        null(),
+                        0, // LANG_NEUTRAL and SORT_DEFAULT
+                        0,
+                    )
+                };
+
+                let result = self.render_message_int(metadata_handle, 512);
+
+                let (error, buffer_size) = match result {
+                    Ok(str) => return Ok(str),
+                    Err((err, bs)) => (err, bs),
+                };
+
+                if (error.code() != HRESULT::from_win32(ERROR_INSUFFICIENT_BUFFER)) {
+                    return Err(format!(
+                        "Error during initial message formatting: {:?}",
+                        error.code()
+                    ));
+                }
+
+                let result = self.render_message_int(metadata_handle, buffer_size as usize);
+
+                match result {
+                    Ok(str) => return Ok(str),
+                    Err((error, buffer_size)) => {
+                        return Err(format!(
+                            "Error during message formatting: {:?}",
+                            error.code()
+                        ));
+                    }
+                }
+            }
+            _ => return Err("Unexpected result on message query".to_owned()),
+        };
     }
+
 }
 
 /// Convenience wrapper around a buffer containing `EVENT_VARIANT` objects.
