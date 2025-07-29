@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 #winapi = { version = "0.3.9", features = ["winevt", "errhandlingapi", "winerror", "winbase"] }
 # Win32_Security is required for EVT_VARIANT
-windows-sys = { version = "0.59.0", features = ["Win32_System_EventLog", "Win32_Security", "Win32_Foundation"] }
+windows-sys = { version = "0.59.0", features = ["Win32_System_EventLog", "Win32_System_Com", "Win32_Security", "Win32_Foundation", "Win32_System_Threading"] }
 windows-strings = "0.2.0"
 windows-result = "0.2.0"
 chrono = "0.4.0"

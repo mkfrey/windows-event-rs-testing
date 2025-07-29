@@ -210,7 +210,7 @@ impl<'a> WindowsEvent<'a> {
                     Err((err, bs)) => (err, bs),
                 };
 
-                if (error.code() != HRESULT::from_win32(ERROR_INSUFFICIENT_BUFFER)) {
+                if error.code() != HRESULT::from_win32(ERROR_INSUFFICIENT_BUFFER) {
                     return Err(format!(
                         "Error during initial message formatting: {:?}",
                         error.code()
@@ -369,7 +369,7 @@ pub enum EventVariantValue {
     UnknownTypeArr(i32),
 }
 
-fn format_guid(guid: &GUID) -> String {
+pub fn format_guid(guid: &GUID) -> String {
     format!(
         "{{{:08x}-{:04x}-{:04x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}}}",
         guid.data1,
