@@ -1,15 +1,11 @@
 use std::ffi::c_void;
-use std::ptr::null;
 use std::ptr::null_mut;
-use std::thread;
-use std::time::Duration;
 
 use windows_result::Error as WindowsError;
 use windows_result::HRESULT;
 use windows_strings::HSTRING;
 use windows_strings::PWSTR;
 use windows_sys::Win32::Foundation::ERROR_NO_MORE_ITEMS;
-use windows_sys::Win32::Foundation::E_OUTOFMEMORY;
 use windows_sys::Win32::Foundation::S_OK;
 use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
 use windows_sys::Win32::Foundation::{FALSE, TRUE};
@@ -24,7 +20,6 @@ mod conversions;
 mod model;
 mod tests;
 
-use conversions::*;
 use model::*;
 
 static NULL_EVT_HANDLE: EVT_HANDLE = 0 as EVT_HANDLE;
@@ -42,7 +37,7 @@ pub extern "system" fn evt_subscribe_callback(
         }
     }
 
-    let event = WindowsEvent::new(&event_handle);
+    let event: BorrowedWindowsEventHandle = BorrowedWindowsEventHandle::new(&event_handle);
 
     let system_context = event.render_system_context();
 
@@ -111,7 +106,7 @@ fn main() {
 
     let context: *mut c_void = null_mut();
     let flags: u32 = EvtSubscribeStartAtOldestRecord; // Swith to EvtSubscribeStartAfterBookmark later on, once bookmarking is implemented
-    let mut new_event_event = unsafe {
+    let new_event_event = unsafe {
         CreateEventW(
             null_mut(),
             TRUE,       // Manual reset
@@ -185,8 +180,7 @@ fn main() {
                 println!("-----------------------------------");
 
                 for event_handle in buffer.iter() {
-                    let event: WindowsEvent<'_> = WindowsEvent::new(event_handle);
-
+                    let event = OwnedWindowsEventHandle::new(*event_handle);
                     let system_context = event.render_system_context();
 
                     match system_context {
@@ -225,9 +219,7 @@ fn main() {
                     match event.render_message() {
                         Ok(val) => println!("Description: {}", val),
                         Err(err) => println!("Error rendering message: {}", err),
-                    };
-
-                    unsafe { EvtClose(event_handle.clone()) };
+                    }
                 }
             }
 

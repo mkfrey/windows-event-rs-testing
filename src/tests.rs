@@ -1,8 +1,8 @@
 #[cfg(test)]
 #[test]
 fn test_time_conversion() {
-    use crate::conversions::WindowsConversionTo;
     use windows_sys::Win32::Foundation::FILETIME;
+    use crate::conversions::WindowsConversionTo;
 
     let time = FILETIME {
         dwHighDateTime: 0xAAAAAAAA as u32,

@@ -1,174 +1,107 @@
 use std::ffi::c_void;
 use std::fmt;
-use std::fmt::Debug;
 use std::ptr::{null, null_mut};
 use std::slice::from_raw_parts;
 
-use crate::WindowsConversionTo;
-use crate::WindowsError;
-
 use chrono::{DateTime, NaiveDateTime, Utc};
-
-use windows_result::HRESULT;
+use windows_result::{Error as WindowsError, HRESULT};
 use windows_strings::HSTRING;
-use windows_sys::core::{GUID, PCSTR as PCSTR_SYS, PCWSTR as PCWSTR_SYS};
+use windows_sys::core::{GUID, PCWSTR};
 use windows_sys::Win32::Foundation::ERROR_INSUFFICIENT_BUFFER;
 use windows_sys::Win32::Security::SID;
 use windows_sys::Win32::System::EventLog::*;
 
+use crate::conversions::*;
+
 static ZERO_BUFFER_SIZE: u32 = 0;
 static NULL_EVT_HANDLE: EVT_HANDLE = 0 as EVT_HANDLE;
 
-/// Windows event handle wrapper providing additional functionality
+/// Windows event handle wrapper for borrowed handles. For use if the underlying handle is automatically closed
+/// e.g. at the end of a event subscription callback function.
 /// IMPORTANT: The wrapped handle needs to be valid for the entire lifetime of the struct.
-pub struct WindowsEvent<'a> {
+#[derive(Debug, Clone, Copy)]
+pub struct BorrowedWindowsEventHandle<'a> {
     handle: &'a EVT_HANDLE,
 }
 
-impl<'a> WindowsEvent<'a> {
+impl<'a> BorrowedWindowsEventHandle<'a> {
     pub fn new(handle: &'a EVT_HANDLE) -> Self {
         Self { handle }
     }
+}
 
-    fn render_generic(
-        &self,
-        valuepaths: &[PCWSTR_SYS],
-        context_flags: u32,
-        render_flags: u32,
-    ) -> Result<(Vec<u8>, u32), String> {
-        let mut buffer_used: u32 = 0;
-        let mut property_count: u32 = 0;
+// Windows event handle wrapper for owned handles. For use if the underlying handle is owned by the struct and needs
+// to be closed when the struct is dropped.
+// IMPORTANT: If the EVT_HANDLE of the query that resulted in this event is closed, the event handle owned by this
+// struct will also be closed. This needs to be enforced by lifetime annotations.
+#[derive(Debug)]
+pub struct OwnedWindowsEventHandle {
+    handle: EVT_HANDLE,
+}
 
-        println!("{:?}", valuepaths);
-        println!("{:?}", valuepaths.as_ptr());
+impl OwnedWindowsEventHandle {
+    pub fn new(handle: EVT_HANDLE) -> Self {
+        Self { handle }
+    }
+}
 
-        let render_context =
-            if render_flags == EvtRenderEventXml || render_flags == EvtRenderBookmark {
-                // For rendering XML or bookmarks, context has to be NULL
-                EventRenderContext::create_null()
-            } else {
-                match EventRenderContext::create(
-                    valuepaths.len() as u32,
-                    if valuepaths.len() > 1 {
-                        valuepaths.as_ptr()
-                    } else {
-                        null()
-                    },
-                    context_flags,
-                ) {
-                    Ok(context) => context,
-                    Err(error) => {
-                        return Err(format!(
-                            "Error trying to create render context: {:?}",
-                            error.message()
-                        ));
-                    }
-                }
-            };
-
-        // Render the event values with zero length buffer to determine size.
-        unsafe {
-            EvtRender(
-                render_context.as_ptr(),
-                *self.handle,
-                render_flags,
-                ZERO_BUFFER_SIZE,
-                null_mut(),
-                &mut buffer_used,
-                &mut property_count,
-            )
-        };
-
-        let last_error = WindowsError::from_win32();
-
-        // ... and to receive the error ERROR_INSUFFICIENT_BUFFER, if anything needs to be rendered.
-        if last_error.code().is_err() {
-            if last_error.code() != HRESULT::from_win32(ERROR_INSUFFICIENT_BUFFER) {
-                return Err(format!(
-                    "Error trying to determine buffer size: {:?}",
-                    last_error.code()
-                ));
+impl Drop for OwnedWindowsEventHandle {
+    fn drop(&mut self) {
+        if self.handle != NULL_EVT_HANDLE {
+            unsafe {
+                EvtClose(self.handle);
             }
         }
-
-        // TODO: Does returning an empty Vec make sense when no error occured?
-
-        let mut buffer: Vec<u8> = vec![0; buffer_used as usize];
-
-        unsafe {
-            EvtRender(
-                render_context.as_ptr(),
-                *self.handle,
-                render_flags,
-                buffer.len() as u32,
-                buffer.as_mut_ptr() as *mut c_void,
-                &mut buffer_used,
-                &mut property_count,
-            )
-        };
-
-        let last_error = WindowsError::from_win32();
-
-        if last_error.code().is_err() {
-            return Err(format!(
-                "Error when trying to render event: {:?}",
-                last_error.message()
-            ));
-        }
-
-        return Ok((buffer, property_count));
     }
+}
 
-    pub fn render_system_context(&self) -> Result<EventSystemContext, String> {
+pub trait WindowsEventHandle {
+    fn get_handle(&self) -> &EVT_HANDLE;
+}
+
+pub trait WindowsEventRender {
+    fn render_system_context(&self) -> Result<EventSystemContext, String>;
+    fn render_user_context(&self) -> Result<Vec<EventVariantValue>, String>;
+    fn render_xml(&self) -> Result<String, String>;
+    fn render_message(&self) -> Result<String, String>;
+}
+
+impl WindowsEventHandle for BorrowedWindowsEventHandle<'_> {
+    fn get_handle(&self) -> &EVT_HANDLE {
+        self.handle
+    }
+}
+
+impl WindowsEventHandle for OwnedWindowsEventHandle {
+    fn get_handle(&self) -> &EVT_HANDLE {
+        &self.handle
+    }
+}
+
+impl<T> WindowsEventRender for T
+where
+    T: WindowsEventHandle,
+{
+    fn render_system_context<'a>(&self) -> Result<EventSystemContext, String> {
         let (raw_buffer, property_count) =
-            self.render_generic(&[], EvtRenderContextSystem, EvtRenderEventValues)?;
+            event_render_generic(self, &[], EvtRenderContextSystem, EvtRenderEventValues)?;
         let buffer = unsafe { EventVariantBuffer::from_raw_buffer(raw_buffer, property_count) };
         Ok(unsafe { EventSystemContext::from_variant_buffer(&buffer) })
     }
 
-    pub fn render_user_context(&self) -> Result<Vec<EventVariantValue>, String> {
+    fn render_user_context(&self) -> Result<Vec<EventVariantValue>, String> {
         let (raw_buffer, property_count) =
-            self.render_generic(&[], EvtRenderContextUser, EvtRenderEventValues)?;
+            event_render_generic(self, &[], EvtRenderContextUser, EvtRenderEventValues)?;
         let buffer = unsafe { EventVariantBuffer::from_raw_buffer(raw_buffer, property_count) };
         Ok(buffer.into_iter().collect())
     }
 
-    pub fn render_xml(&self) -> Result<String, String> {
-        let (raw_buffer, _) = self.render_generic(&[], 0, EvtRenderEventXml)?;
-
+    fn render_xml<'x>(&'x self) -> Result<String, String> {
+        let (raw_buffer, _) = event_render_generic(self, &[], 0, EvtRenderEventXml)?;
         Ok((raw_buffer.as_ptr() as *const u16).win_into())
     }
 
-    fn render_message_int(
-        &self,
-        metadata: isize,
-        max_buf_len: usize,
-    ) -> Result<String, (WindowsError, u32)> {
-        let mut message_buf: Vec<u16> = vec![0; max_buf_len];
-        let mut buffer_used: u32 = 0;
-
-        let result = unsafe {
-            EvtFormatMessage(
-                metadata,
-                *self.handle,
-                0,
-                0,
-                null(),
-                EvtFormatMessageEvent,
-                message_buf.len() as u32,
-                message_buf.as_mut_ptr(),
-                &mut buffer_used,
-            )
-        };
-
-        if result != 0 {
-            Ok(message_buf.as_ptr().win_into())
-        } else {
-            Err((WindowsError::from_win32(), buffer_used))
-        }
-    }
-
-    pub fn render_message(&self) -> Result<String, String> {
+    fn render_message(&self) -> Result<String, String> {
         let pathspec_system_provider = HSTRING::from("Event/System/Provider/@Name");
         let pathspec_rendering_inf = HSTRING::from("Event/RenderingInfo/Message");
 
@@ -177,7 +110,8 @@ impl<'a> WindowsEvent<'a> {
             pathspec_rendering_inf.as_ptr(),
         ];
 
-        let (raw_buffer, property_count) = self.render_generic(
+        let (raw_buffer, property_count) = event_render_generic(
+            self,
             pathspecs.as_slice(),
             EvtRenderContextValues,
             EvtRenderEventValues,
@@ -203,7 +137,7 @@ impl<'a> WindowsEvent<'a> {
                     )
                 };
 
-                let result = self.render_message_int(metadata_handle, 512);
+                let result = event_format_message(self, metadata_handle, 512);
 
                 let (error, buffer_size) = match result {
                     Ok(str) => return Ok(str),
@@ -217,7 +151,7 @@ impl<'a> WindowsEvent<'a> {
                     ));
                 }
 
-                let result = self.render_message_int(metadata_handle, buffer_size as usize);
+                let result = event_format_message(self, metadata_handle, buffer_size as usize);
 
                 match result {
                     Ok(str) => return Ok(str),
@@ -231,6 +165,161 @@ impl<'a> WindowsEvent<'a> {
             }
             _ => return Err("Unexpected result on message query".to_owned()),
         };
+    }
+}
+
+/// Rust wrapper of an event render context
+pub struct EventRenderContext {
+    render_context: EVT_HANDLE,
+}
+
+/// Implement trait `Drop` to enforce proper disposal of the underlying Windows object.
+impl Drop for EventRenderContext {
+    fn drop(&mut self) {
+        if self.render_context != NULL_EVT_HANDLE {
+            unsafe {
+                EvtClose(self.render_context);
+            };
+        }
+    }
+}
+
+impl EventRenderContext {
+    /// Create a new render context with the provided parameters.
+    ///
+    /// # Parameters
+    /// - `valuepathscount`: The number of elements in the `valuepaths` array.
+    /// - `valuepaths`: A pointer to an array of strings that specify the names of the values to be rendered.
+    /// - `flags`: Flags that specify which context is created.
+    pub fn create(
+        valuepathscount: u32,
+        valuepaths: *const windows_sys::core::PCWSTR,
+        flags: u32,
+    ) -> Result<Self, WindowsError> {
+        let context = unsafe { EvtCreateRenderContext(valuepathscount, valuepaths, flags) };
+
+        if context == NULL_EVT_HANDLE {
+            Err(WindowsError::from_win32())
+        } else {
+            Ok(Self {
+                render_context: context,
+            })
+        }
+    }
+
+    /// Create a render context with a `NULL` handle.
+    ///
+    /// Useful if render call requires the context parameter to be NULL.
+    pub fn create_null() -> Self {
+        Self {
+            render_context: NULL_EVT_HANDLE,
+        }
+    }
+
+    /// Get the underlying `EVT_HANDLE` of the context.
+    pub fn as_ptr(&self) -> &EVT_HANDLE {
+        &self.render_context
+    }
+}
+
+/// Rust representation of a rendered system context.
+///
+/// See https://learn.microsoft.com/en-us/windows/win32/api/winevt/ne-winevt-evt_system_property_id for system context values
+pub struct EventSystemContext {
+    pub provider_name: String,
+    pub provider_guid: Option<GUID>,
+    pub event_id: u16,
+    pub qualifiers: u16,
+    pub level: u8,
+    pub task: u16,
+    pub opcode: u8,
+    pub keywords: i64,
+    pub time_created: u64,
+    pub event_record_id: u64,
+    pub activity_id: Option<GUID>,
+    pub related_activity_id: Option<GUID>,
+    pub process_id: u32,
+    pub thread_id: u32,
+    pub channel: String,
+    pub computer: String,
+    pub user_id: Option<SID>,
+    pub version: u8,
+}
+
+impl EventSystemContext {
+    /// Extract the system context data from a variant buffer.
+    ///
+    /// # Safety
+    ///
+    /// This function is unsafe because it assumes that the `variant` parameter contains valid system context data.
+    /// No checks are performed to ensure the validity of the data, and dereferencing raw pointers is inherently unsafe.
+    pub unsafe fn from_variant_buffer(variant: &EventVariantBuffer) -> Self {
+        unsafe {
+            Self {
+                provider_name: variant
+                    .index(EvtSystemProviderName as isize)
+                    .Anonymous
+                    .StringVal
+                    .win_into(),
+                provider_guid: variant
+                    .index(EvtSystemProviderGuid as isize)
+                    .Anonymous
+                    .GuidVal
+                    .as_ref()
+                    .cloned(),
+                event_id: variant.index(EvtSystemEventID as isize).Anonymous.UInt16Val,
+                qualifiers: variant
+                    .index(EvtSystemQualifiers as isize)
+                    .Anonymous
+                    .UInt16Val,
+                level: variant.index(EvtSystemLevel as isize).Anonymous.ByteVal,
+                task: variant.index(EvtSystemTask as isize).Anonymous.UInt16Val,
+                opcode: variant.index(EvtSystemOpcode as isize).Anonymous.ByteVal,
+                keywords: variant.index(EvtSystemKeywords as isize).Anonymous.Int64Val,
+                time_created: variant
+                    .index(EvtSystemTimeCreated as isize)
+                    .Anonymous
+                    .UInt64Val,
+                event_record_id: variant
+                    .index(EvtSystemEventRecordId as isize)
+                    .Anonymous
+                    .UInt64Val,
+                activity_id: variant
+                    .index(EvtSystemActivityID as isize)
+                    .Anonymous
+                    .GuidVal
+                    .as_ref()
+                    .cloned(),
+                related_activity_id: variant
+                    .index(EvtSystemRelatedActivityID as isize)
+                    .Anonymous
+                    .GuidVal
+                    .as_ref()
+                    .cloned(),
+                process_id: variant
+                    .index(EvtSystemProcessID as isize)
+                    .Anonymous
+                    .UInt32Val,
+                thread_id: variant
+                    .index(EvtSystemThreadID as isize)
+                    .Anonymous
+                    .UInt32Val,
+                channel: variant
+                    .index(EvtSystemChannel as isize)
+                    .Anonymous
+                    .StringVal
+                    .win_into(),
+                computer: variant
+                    .index(EvtSystemComputer as isize)
+                    .Anonymous
+                    .StringVal
+                    .win_into(),
+                user_id: (variant.index(EvtSystemUserID as isize).Anonymous.SidVal as *const SID)
+                    .as_ref()
+                    .cloned(),
+                version: variant.index(EvtSystemVersion as isize).Anonymous.ByteVal,
+            }
+        }
     }
 }
 
@@ -280,6 +369,7 @@ impl EventVariantBuffer {
     }
 }
 
+// Implement the iterator trait for the variant buffer to allow iterating over all variants.
 impl<'a> IntoIterator for &'a EventVariantBuffer {
     type Item = EventVariantValue;
 
@@ -367,64 +457,6 @@ pub enum EventVariantValue {
     XmlArr(Vec<String>),
     UnknownType(i32),
     UnknownTypeArr(i32),
-}
-
-pub fn format_guid(guid: &GUID) -> String {
-    format!(
-        "{{{:08x}-{:04x}-{:04x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}}}",
-        guid.data1,
-        guid.data2,
-        guid.data3,
-        guid.data4[0],
-        guid.data4[1],
-        guid.data4[2],
-        guid.data4[3],
-        guid.data4[4],
-        guid.data4[5],
-        guid.data4[6],
-        guid.data4[7]
-    )
-}
-
-fn format_sid(value: &SID) -> String {
-    use std::slice;
-    let revision = unsafe { *(&value.Revision as *const u8) };
-    let sub_authority_count = unsafe { *(&value.SubAuthorityCount as *const u8) };
-    let identifier_authority = &value.IdentifierAuthority.Value;
-    let sub_authorities = unsafe {
-        slice::from_raw_parts(
-            &value.SubAuthority as *const u32,
-            sub_authority_count as usize,
-        )
-    };
-
-    let identifier_authority = if identifier_authority[0..5] == [0, 0, 0, 0, 0] {
-        identifier_authority[5].to_string()
-    } else {
-        format!(
-            "{}",
-            u64::from_be_bytes([
-                0,
-                0,
-                identifier_authority[0],
-                identifier_authority[1],
-                identifier_authority[2],
-                identifier_authority[3],
-                identifier_authority[4],
-                identifier_authority[5]
-            ])
-        )
-    };
-
-    let sub_authorities = sub_authorities
-        .iter()
-        .map(|s| s.to_string())
-        .collect::<Vec<_>>()
-        .join("-");
-    format!(
-        "S-{}-{}-{}",
-        revision, identifier_authority, sub_authorities
-    )
 }
 
 impl fmt::Debug for EventVariantValue {
@@ -536,13 +568,13 @@ impl From<EVT_VARIANT> for EventVariantValue {
                 #![allow(nonstandard_style)]
                 match value_type {
                     EvtVarTypeString => Self::StringArr(
-                        from_raw_parts(value.Anonymous.StringArr as *const PCWSTR_SYS, count)
+                        from_raw_parts(value.Anonymous.StringArr as *const PCWSTR, count)
                             .iter()
                             .map(|s| (*s).win_into())
                             .collect(),
                     ),
                     EvtVarTypeAnsiString => Self::AnsiStringArr(
-                        from_raw_parts(value.Anonymous.AnsiStringArr as *const PCSTR_SYS, count)
+                        from_raw_parts(value.Anonymous.AnsiStringArr as *const PCWSTR, count)
                             .iter()
                             .map(|s| (*s).win_into())
                             .collect(),
@@ -616,7 +648,7 @@ impl From<EVT_VARIANT> for EventVariantValue {
                     EvtVarTypeEvtXml => Self::XmlArr(
                         from_raw_parts(value.Anonymous.XmlValArr, count)
                             .iter()
-                            .map(|s| (*s as PCWSTR_SYS).win_into())
+                            .map(|s| (*s as PCWSTR).win_into())
                             .collect(),
                     ),
                     _ => Self::UnknownTypeArr(value_type),
@@ -661,157 +693,173 @@ impl From<EVT_VARIANT> for EventVariantValue {
     }
 }
 
-/// Rust representation of an event render context
-pub struct EventRenderContext {
-    render_context: EVT_HANDLE,
-}
+fn event_render_generic<T: WindowsEventHandle>(
+    event: &T,
+    valuepaths: &[PCWSTR],
+    context_flags: u32,
+    render_flags: u32,
+) -> Result<(Vec<u8>, u32), String> {
+    let mut buffer_used: u32 = 0;
+    let mut property_count: u32 = 0;
 
-/// Implement trait `Drop` to enforce proper disposal of the underlying windows object.
-impl Drop for EventRenderContext {
-    fn drop(&mut self) {
-        if self.render_context != NULL_EVT_HANDLE {
-            unsafe {
-                EvtClose(self.render_context);
-            };
-        }
-    }
-}
-
-impl EventRenderContext {
-    /// Create a new render context with the provided parameters.
-    ///
-    /// # Parameters
-    /// - `valuepathscount`: The number of elements in the `valuepaths` array.
-    /// - `valuepaths`: A pointer to an array of strings that specify the names of the values to be rendered.
-    /// - `flags`: Flags that specify which context is created.
-    pub fn create(
-        valuepathscount: u32,
-        valuepaths: *const windows_sys::core::PCWSTR,
-        flags: u32,
-    ) -> Result<Self, WindowsError> {
-        let context = unsafe { EvtCreateRenderContext(valuepathscount, valuepaths, flags) };
-
-        if context == NULL_EVT_HANDLE {
-            Err(WindowsError::from_win32())
-        } else {
-            Ok(Self {
-                render_context: context,
-            })
-        }
-    }
-
-    /// Create a render context with a `NULL` handle.
-    ///
-    /// Useful if render call requires the context parameter to be NULL.
-    pub fn create_null() -> Self {
-        Self {
-            render_context: NULL_EVT_HANDLE,
-        }
-    }
-
-    /// Get the underlying `EVT_HANDLE` of the context.
-    pub fn as_ptr(&self) -> EVT_HANDLE {
-        self.render_context
-    }
-}
-
-/// Rust representation of a rendered system context.
-///
-/// See https://learn.microsoft.com/en-us/windows/win32/api/winevt/ne-winevt-evt_system_property_id for system context values
-pub struct EventSystemContext {
-    pub provider_name: String,
-    pub provider_guid: Option<GUID>,
-    pub event_id: u16,
-    pub qualifiers: u16,
-    pub level: u8,
-    pub task: u16,
-    pub opcode: u8,
-    pub keywords: i64,
-    pub time_created: u64,
-    pub event_record_id: u64,
-    pub activity_id: Option<GUID>,
-    pub related_activity_id: Option<GUID>,
-    pub process_id: u32,
-    pub thread_id: u32,
-    pub channel: String,
-    pub computer: String,
-    pub user_id: Option<SID>,
-    pub version: u8,
-}
-
-impl EventSystemContext {
-    /// Extract the system context data from a variant buffer.
-    ///
-    /// # Safety
-    ///
-    /// This function is unsafe because it assumes that the `variant` parameter contains valid system context data.
-    /// No checks are performed to ensure the validity of the data, and dereferencing raw pointers is inherently unsafe.
-    pub unsafe fn from_variant_buffer(variant: &EventVariantBuffer) -> Self {
-        unsafe {
-            Self {
-                provider_name: variant
-                    .index(EvtSystemProviderName as isize)
-                    .Anonymous
-                    .StringVal
-                    .win_into(),
-                provider_guid: variant
-                    .index(EvtSystemProviderGuid as isize)
-                    .Anonymous
-                    .GuidVal
-                    .as_ref()
-                    .cloned(),
-                event_id: variant.index(EvtSystemEventID as isize).Anonymous.UInt16Val,
-                qualifiers: variant
-                    .index(EvtSystemQualifiers as isize)
-                    .Anonymous
-                    .UInt16Val,
-                level: variant.index(EvtSystemLevel as isize).Anonymous.ByteVal,
-                task: variant.index(EvtSystemTask as isize).Anonymous.UInt16Val,
-                opcode: variant.index(EvtSystemOpcode as isize).Anonymous.ByteVal,
-                keywords: variant.index(EvtSystemKeywords as isize).Anonymous.Int64Val,
-                time_created: variant
-                    .index(EvtSystemTimeCreated as isize)
-                    .Anonymous
-                    .UInt64Val,
-                event_record_id: variant
-                    .index(EvtSystemEventRecordId as isize)
-                    .Anonymous
-                    .UInt64Val,
-                activity_id: variant
-                    .index(EvtSystemActivityID as isize)
-                    .Anonymous
-                    .GuidVal
-                    .as_ref()
-                    .cloned(),
-                related_activity_id: variant
-                    .index(EvtSystemRelatedActivityID as isize)
-                    .Anonymous
-                    .GuidVal
-                    .as_ref()
-                    .cloned(),
-                process_id: variant
-                    .index(EvtSystemProcessID as isize)
-                    .Anonymous
-                    .UInt32Val,
-                thread_id: variant
-                    .index(EvtSystemThreadID as isize)
-                    .Anonymous
-                    .UInt32Val,
-                channel: variant
-                    .index(EvtSystemChannel as isize)
-                    .Anonymous
-                    .StringVal
-                    .win_into(),
-                computer: variant
-                    .index(EvtSystemComputer as isize)
-                    .Anonymous
-                    .StringVal
-                    .win_into(),
-                user_id: (variant.index(EvtSystemUserID as isize).Anonymous.SidVal as *const SID)
-                    .as_ref()
-                    .cloned(),
-                version: variant.index(EvtSystemVersion as isize).Anonymous.ByteVal,
+    let render_context = if render_flags == EvtRenderEventXml || render_flags == EvtRenderBookmark {
+        // For rendering XML or bookmarks, context has to be NULL
+        EventRenderContext::create_null()
+    } else {
+        match EventRenderContext::create(
+            valuepaths.len() as u32,
+            if valuepaths.len() > 1 {
+                valuepaths.as_ptr()
+            } else {
+                null()
+            },
+            context_flags,
+        ) {
+            Ok(context) => context,
+            Err(error) => {
+                return Err(format!(
+                    "Error trying to create render context: {:?}",
+                    error.message()
+                ));
             }
         }
+    };
+
+    // Render the event values with zero length buffer to determine size.
+    unsafe {
+        EvtRender(
+            *render_context.as_ptr(),
+            *event.get_handle(),
+            render_flags,
+            ZERO_BUFFER_SIZE,
+            null_mut(),
+            &mut buffer_used,
+            &mut property_count,
+        )
+    };
+
+    let last_error = WindowsError::from_win32();
+
+    // ... and to receive the error ERROR_INSUFFICIENT_BUFFER, if anything needs to be rendered.
+    if last_error.code().is_err() {
+        if last_error.code() != HRESULT::from_win32(ERROR_INSUFFICIENT_BUFFER) {
+            return Err(format!(
+                "Error trying to determine buffer size: {:?}",
+                last_error.code()
+            ));
+        }
     }
+
+    // TODO: Does returning an empty Vec make sense when no error occured?
+    let mut buffer: Vec<u8> = vec![0; buffer_used as usize];
+
+    unsafe {
+        EvtRender(
+            *render_context.as_ptr(),
+            *event.get_handle(),
+            render_flags,
+            buffer.len() as u32,
+            buffer.as_mut_ptr() as *mut c_void,
+            &mut buffer_used,
+            &mut property_count,
+        )
+    };
+
+    let last_error = WindowsError::from_win32();
+
+    if last_error.code().is_err() {
+        return Err(format!(
+            "Error when trying to render event: {:?}",
+            last_error.message()
+        ));
+    }
+
+    return Ok((buffer, property_count));
+}
+
+fn event_format_message<T: WindowsEventHandle>(
+    event: &T,
+    metadata: isize,
+    max_buf_len: usize,
+) -> Result<String, (WindowsError, u32)> {
+    let mut message_buf: Vec<u16> = vec![0; max_buf_len];
+    let mut buffer_used: u32 = 0;
+
+    let result = unsafe {
+        EvtFormatMessage(
+            metadata,
+            *event.get_handle(),
+            0,
+            0,
+            null(),
+            EvtFormatMessageEvent,
+            message_buf.len() as u32,
+            message_buf.as_mut_ptr(),
+            &mut buffer_used,
+        )
+    };
+
+    if result != 0 {
+        Ok(message_buf.as_ptr().win_into())
+    } else {
+        Err((WindowsError::from_win32(), buffer_used))
+    }
+}
+
+pub fn format_guid(guid: &GUID) -> String {
+    format!(
+        "{{{:08x}-{:04x}-{:04x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}}}",
+        guid.data1,
+        guid.data2,
+        guid.data3,
+        guid.data4[0],
+        guid.data4[1],
+        guid.data4[2],
+        guid.data4[3],
+        guid.data4[4],
+        guid.data4[5],
+        guid.data4[6],
+        guid.data4[7]
+    )
+}
+
+fn format_sid(value: &SID) -> String {
+    use std::slice;
+    let revision = unsafe { *(&value.Revision as *const u8) };
+    let sub_authority_count = unsafe { *(&value.SubAuthorityCount as *const u8) };
+    let identifier_authority = &value.IdentifierAuthority.Value;
+    let sub_authorities = unsafe {
+        slice::from_raw_parts(
+            &value.SubAuthority as *const u32,
+            sub_authority_count as usize,
+        )
+    };
+
+    let identifier_authority = if identifier_authority[0..5] == [0, 0, 0, 0, 0] {
+        identifier_authority[5].to_string()
+    } else {
+        format!(
+            "{}",
+            u64::from_be_bytes([
+                0,
+                0,
+                identifier_authority[0],
+                identifier_authority[1],
+                identifier_authority[2],
+                identifier_authority[3],
+                identifier_authority[4],
+                identifier_authority[5]
+            ])
+        )
+    };
+
+    let sub_authorities = sub_authorities
+        .iter()
+        .map(|s| s.to_string())
+        .collect::<Vec<_>>()
+        .join("-");
+    format!(
+        "S-{}-{}-{}",
+        revision, identifier_authority, sub_authorities
+    )
 }
