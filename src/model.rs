@@ -7,9 +7,14 @@ use chrono::{DateTime, NaiveDateTime, Utc};
 use windows_result::{Error as WindowsError, HRESULT};
 use windows_strings::HSTRING;
 use windows_sys::core::{GUID, PCWSTR};
-use windows_sys::Win32::Foundation::ERROR_INSUFFICIENT_BUFFER;
+use windows_sys::Win32::Foundation::{
+    CloseHandle, ERROR_INSUFFICIENT_BUFFER, ERROR_NO_MORE_ITEMS, FALSE, TRUE, WAIT_OBJECT_0,
+};
 use windows_sys::Win32::Security::SID;
 use windows_sys::Win32::System::EventLog::*;
+use windows_sys::Win32::System::Threading::{
+    CreateEventW, ResetEvent, WaitForSingleObject, INFINITE,
+};
 
 use crate::conversions::*;
 
@@ -55,15 +60,10 @@ impl Drop for OwnedWindowsEventHandle {
     }
 }
 
+// Windows event handle trait
+// `get_handle()` must return a reference to an `EVT_HANDLE` referencing a Windows Event Log entry.
 pub trait WindowsEventHandle {
     fn get_handle(&self) -> &EVT_HANDLE;
-}
-
-pub trait WindowsEventRender {
-    fn render_system_context(&self) -> Result<EventSystemContext, String>;
-    fn render_user_context(&self) -> Result<Vec<EventVariantValue>, String>;
-    fn render_xml(&self) -> Result<String, String>;
-    fn render_message(&self) -> Result<String, String>;
 }
 
 impl WindowsEventHandle for BorrowedWindowsEventHandle<'_> {
@@ -78,26 +78,41 @@ impl WindowsEventHandle for OwnedWindowsEventHandle {
     }
 }
 
+pub trait WindowsEventRender {
+    fn render_system_context(&self) -> Result<EventSystemContext, String>;
+    fn render_user_context(&self) -> Result<Vec<EventVariantValue>, String>;
+    fn render_xml(&self) -> Result<String, String>;
+    fn render_message(&self) -> Result<String, String>;
+}
+
 impl<T> WindowsEventRender for T
 where
     T: WindowsEventHandle,
 {
     fn render_system_context<'a>(&self) -> Result<EventSystemContext, String> {
-        let (raw_buffer, property_count) =
-            event_render_generic(self, &[], EvtRenderContextSystem, EvtRenderEventValues)?;
+        let (raw_buffer, property_count) = event_render_generic(
+            self.get_handle(),
+            &[],
+            EvtRenderContextSystem,
+            EvtRenderEventValues,
+        )?;
         let buffer = unsafe { EventVariantBuffer::from_raw_buffer(raw_buffer, property_count) };
         Ok(unsafe { EventSystemContext::from_variant_buffer(&buffer) })
     }
 
     fn render_user_context(&self) -> Result<Vec<EventVariantValue>, String> {
-        let (raw_buffer, property_count) =
-            event_render_generic(self, &[], EvtRenderContextUser, EvtRenderEventValues)?;
+        let (raw_buffer, property_count) = event_render_generic(
+            self.get_handle(),
+            &[],
+            EvtRenderContextUser,
+            EvtRenderEventValues,
+        )?;
         let buffer = unsafe { EventVariantBuffer::from_raw_buffer(raw_buffer, property_count) };
         Ok(buffer.into_iter().collect())
     }
 
     fn render_xml<'x>(&'x self) -> Result<String, String> {
-        let (raw_buffer, _) = event_render_generic(self, &[], 0, EvtRenderEventXml)?;
+        let (raw_buffer, _) = event_render_generic(self.get_handle(), &[], 0, EvtRenderEventXml)?;
         Ok((raw_buffer.as_ptr() as *const u16).win_into())
     }
 
@@ -111,7 +126,7 @@ where
         ];
 
         let (raw_buffer, property_count) = event_render_generic(
-            self,
+            self.get_handle(),
             pathspecs.as_slice(),
             EvtRenderContextValues,
             EvtRenderEventValues,
@@ -693,8 +708,239 @@ impl From<EVT_VARIANT> for EventVariantValue {
     }
 }
 
-fn event_render_generic<T: WindowsEventHandle>(
-    event: &T,
+pub struct WindowsThreadingEvent {
+    handle: std::ptr::NonNull<c_void>,
+}
+
+impl<'a> WindowsThreadingEvent {
+    pub fn new() -> Result<Self, String> {
+        let handle: *mut c_void = unsafe {
+            CreateEventW(
+                null_mut(),
+                TRUE,       // Manual reset
+                TRUE,       // Initial state is non-signaled
+                null_mut(), // No name
+            )
+        };
+
+        let handle = std::ptr::NonNull::new(handle).ok_or_else(|| {
+            let last_error = WindowsError::from_win32();
+            println!("Failed to create event: {:?}", last_error.message());
+            last_error.message()
+        })?;
+
+        Ok(Self { handle })
+    }
+
+    fn get_handle(&self) -> *mut c_void {
+        self.handle.as_ptr()
+    }
+}
+
+impl Drop for WindowsThreadingEvent {
+    fn drop(&mut self) {
+        unsafe {
+            CloseHandle(self.handle.as_ptr());
+        }
+    }
+}
+
+// Wrapper around a windows event log bookmark
+pub struct WindowsEventLogBookmark {
+    handle: EVT_HANDLE,
+}
+
+impl WindowsEventLogBookmark {
+    pub fn new() -> Result<Self, String> {
+        let handle: EVT_HANDLE = unsafe { EvtCreateBookmark(null_mut()) };
+
+        if handle == 0 {
+            let last_error = WindowsError::from_win32();
+            return Err(format!(
+                "Failed to create bookmark: {:?}",
+                last_error.message()
+            ));
+        }
+
+        Ok(Self { handle })
+    }
+
+    pub fn from_xml(xml: &str) -> Result<Self, String> {
+        let xml = HSTRING::from(xml);
+
+        let handle: EVT_HANDLE = unsafe { EvtCreateBookmark(xml.as_ptr()) };
+
+        if handle == 0 {
+            let last_error = WindowsError::from_win32();
+            return Err(format!(
+                "Failed to create bookmark from XML: {:?}",
+                last_error.message()
+            ));
+        }
+
+        Ok(Self { handle })
+    }
+
+    pub fn to_xml(&self) -> Result<String, String> {
+        let (buffer, _) = event_render_generic(&self.handle, &[], 0, EvtRenderBookmark)?;
+        let xml = (buffer.as_ptr() as *const u16).win_into();
+        Ok(xml)
+    }
+
+    pub fn update<T: WindowsEventHandle>(&self, event: &T) -> Result<(), String> {
+        let res = unsafe { EvtUpdateBookmark(self.handle, *event.get_handle()) };
+        if res == 0 {
+            let last_error = WindowsError::from_win32();
+            return Err(format!(
+                "Failed to update bookmark: {:?}",
+                last_error.message()
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl Drop for WindowsEventLogBookmark {
+    fn drop(&mut self) {
+        unsafe {
+            EvtClose(self.handle);
+        }
+    }
+}
+
+pub struct WindowsEventLogPollingSubscription {
+    handle: EVT_HANDLE,
+    event: WindowsThreadingEvent,
+}
+
+impl WindowsEventLogPollingSubscription {
+    pub fn new(
+        channel: &str,
+        query: Option<&str>,
+        bookmark: Option<WindowsEventLogBookmark>,
+    ) -> Result<Self, String> {
+        let event = WindowsThreadingEvent::new()?;
+        let channel = HSTRING::from(channel);
+        let query = query.map(|q| HSTRING::from(q));
+
+        let handle: EVT_HANDLE = unsafe {
+            EvtSubscribe(
+                NULL_EVT_HANDLE,
+                event.get_handle(),
+                channel.as_ptr(),
+                query.as_ref().map_or(null(), |q| q.as_ptr()),
+                NULL_EVT_HANDLE, // TODO: Implement bookmark support
+                null(),
+                None,
+                if bookmark.is_some() {
+                    EvtSubscribeStartAfterBookmark
+                } else {
+                    EvtSubscribeStartAtOldestRecord
+                },
+            )
+        };
+
+        if handle == 0 {
+            let last_error = WindowsError::from_win32();
+            return Err(format!(
+                "Received unexpected error while subscribing to events: {:?}",
+                last_error.message()
+            ));
+        }
+
+        Ok(Self { handle, event })
+    }
+
+    pub fn read_events_blocking<F>(&self, f: F, max_events: usize, timeout: u32)
+    where
+        F: Fn(&OwnedWindowsEventHandle),
+    {
+        let mut buffer: Vec<EVT_HANDLE> = Vec::with_capacity(max_events);
+        let mut events_returned: u32 = 0;
+
+        loop {
+            println!("Waiting for events...");
+            let wait_result = unsafe {
+                WaitForSingleObject(
+                    self.event.get_handle(),
+                    INFINITE, // INFINITE
+                )
+            };
+
+            if wait_result == WAIT_OBJECT_0 {
+                println!("Event signaled, processing events...");
+
+                // The event was signaled, meaning new events are available
+                while unsafe {
+                    EvtNext(
+                        self.handle,
+                        buffer.capacity() as u32,
+                        buffer.as_mut_ptr(),
+                        0,
+                        0,
+                        &mut events_returned,
+                    )
+                } == TRUE
+                {
+                    unsafe { buffer.set_len(events_returned as usize) };
+
+                    if events_returned == 0 {
+                        break;
+                    }
+
+                    println!("-----------------------------------");
+                    println!("Received {} events", events_returned);
+                    println!("-----------------------------------");
+
+                    for event_handle in buffer.iter() {
+                        let event = OwnedWindowsEventHandle::new(*event_handle);
+                        f(&event);
+                    }
+                }
+
+                let last_error = WindowsError::from_win32();
+                if last_error.code() != HRESULT::from_win32(ERROR_NO_MORE_ITEMS) {
+                    println!(
+                        "EvtNext failed: {:?} ({:?})",
+                        last_error.message(),
+                        last_error.code()
+                    );
+                    break;
+                }
+
+                // Reset the event to wait for new events again
+                if unsafe { ResetEvent(self.event.get_handle()) } == FALSE {
+                    let last_error = WindowsError::from_win32();
+                    println!(
+                        "ResetEvent failed: {:?} ({:?})",
+                        last_error.message(),
+                        last_error.code()
+                    );
+                }
+            } else {
+                let last_error = WindowsError::from_win32();
+                println!(
+                    "WaitForSingleObject failed: {:?} ({:?})",
+                    last_error.message(),
+                    last_error.code()
+                );
+            }
+        }
+    }
+}
+
+impl Drop for WindowsEventLogPollingSubscription {
+    fn drop(&mut self) {
+        if self.handle != NULL_EVT_HANDLE {
+            unsafe {
+                EvtClose(self.handle);
+            }
+        }
+    }
+}
+
+fn event_render_generic(
+    event: &EVT_HANDLE,
     valuepaths: &[PCWSTR],
     context_flags: u32,
     render_flags: u32,
@@ -729,7 +975,7 @@ fn event_render_generic<T: WindowsEventHandle>(
     unsafe {
         EvtRender(
             *render_context.as_ptr(),
-            *event.get_handle(),
+            *event,
             render_flags,
             ZERO_BUFFER_SIZE,
             null_mut(),
@@ -756,7 +1002,7 @@ fn event_render_generic<T: WindowsEventHandle>(
     unsafe {
         EvtRender(
             *render_context.as_ptr(),
-            *event.get_handle(),
+            *event,
             render_flags,
             buffer.len() as u32,
             buffer.as_mut_ptr() as *mut c_void,
